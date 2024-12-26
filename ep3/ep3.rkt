@@ -1,0 +1,529 @@
+#lang plai-typed
+
+
+
+#| primeiro as expressões "primitivas", ou seja, diretamente interpretadas
+ |#
+
+(define-type ExprC
+  [numC    (n : number)]
+  [idC     (s : symbol)]
+  [plusC   (l : ExprC) (r : ExprC)]
+  [multC   (l : ExprC) (r : ExprC)]
+  [ifC     (cond : ExprC) (y : ExprC) (n : ExprC)]
+  [letC (var : symbol) (expression : ExprC) (body : ExprC)]
+  [quoteC  (sym : symbol)]
+  [readloopC (placeholder : symbol)]
+  [nullC]
+  [seqC  (statement1 : ExprC) (statement2 : ExprC)]
+  [setC  (varName : symbol) (statement : ExprC)]
+
+  ;;;;; NEW IMPLEMENTATION
+  [newC    (class : symbol) (value : ExprC)]
+  [classC  (superClass : symbol) (instVar : symbol) (method1 : ExprC ) (method2 : ExprC)]
+  [regularMethodC (name : symbol) (arg : symbol) (body : ExprC)]
+  [primitiveMethodC (name : symbol) (primNumber : number)]
+  [sendC   (receiver : ExprC) (method : symbol) (arg : ExprC)]
+  
+  )
+#| agora a linguagem aumentada pelo açúcar sintático
+ | neste caso a operação de subtração e menus unário
+ |#
+
+(define-type ExprS
+  [numS    (n : number)]
+  [idS     (s : symbol)]
+  [plusS   (l : ExprS) (r : ExprS)]
+  [bminusS (l : ExprS) (r : ExprS)]
+  [uminusS (e : ExprS)]
+  [multS   (l : ExprS) (r : ExprS)]
+  [ifS     (c : ExprS) (y : ExprS) (n : ExprS)]
+  [letS    (var : symbol) (exp : ExprS) (body : ExprS)]
+  [quoteS  (sym : symbol)]
+  [readloopS (placeholder : symbol)]
+  [seqS (statement1 : ExprS) (statement2 : ExprS)]
+  [setS (variable : symbol) (statement : ExprS)]
+  ;Deixei as opções aqui, para facilitar, basta retirar o ";" 
+  [newS    (class : symbol) (value : ExprS)]
+  [classS  (superClass : symbol) (instVar : symbol) (method1 : ExprS ) (method2 : ExprS)]
+  [regularMethodS (name : symbol) (arg : symbol) (body : ExprS)]
+  [primitiveMethodS (name : symbol) (primNumber : number)]
+  [sendS   (receiver : ExprS) (method : symbol) (arg : ExprS)]
+  [nullS  ]
+  )
+
+
+(define (desugar [as : ExprS]) : ExprC
+  (type-case ExprS as
+    [numS    (n)        (numC n)]
+    [idS     (s)        (idC s)]
+    [plusS   (l r)      (plusC (desugar l) (desugar r))]
+    [multS   (l r)      (multC (desugar l) (desugar r))]
+    [bminusS (l r)      (plusC (desugar l) (multC (numC -1) (desugar r)))]
+    [uminusS (e)        (multC (numC -1) (desugar e))]
+    [ifS     (c y n)    (ifC (desugar c) (desugar y) (desugar n))]
+    [letS    (v e b)    (letC v (desugar e) (desugar b))]
+    [quoteS  (sym) (quoteC sym)]
+    [readloopS (s) (readloopC s)]
+    [nullS  ()  (nullC)]
+    [seqS (st1 st2) (seqC (desugar st1) (desugar st2))]
+    [setS (var st)  (setC var (desugar st))]
+
+    ;;;;; NEW IMPLEMENTATION
+    [newS    (c v)       (newC c (desugar v))]
+    [classS  (sc iv m1 m2) (classC sc iv (desugar m1) (desugar m2))]
+    [regularMethodS (n a b) (regularMethodC n a (desugar b))]
+    [primitiveMethodS (n pnum) (primitiveMethodC n pnum)]
+    [sendS   (r m a)     (sendC (desugar r) m (desugar a))]
+    
+    ))
+
+
+
+; We need a new value for the box
+(define-type Value
+  [numV  (n : number)]
+  ;[closV (arg : symbol) (body : ExprC) (env : Env)]
+  ;[consV (car : Value) (cdr : Value)]
+  [symV (sym : symbol)]
+  [nullV ]
+  
+  ;; NEW IMPLEMENTATION
+  ; note que em classV superClass é um Value, porém em classC e classS superClass é um symbol
+  [classV  (superClass : Value) (instVar : symbol) (method1 : Value) (method2 : Value)]
+  [methodV (name : symbol) (def : MethodDefinition)]
+  [objectV (class : Value) (instVar : Env)]
+  
+  )
+
+; Bindings associate symbol with Values
+(define-type Binding
+        [bind (name : symbol) (val : (boxof Value))])
+
+
+; Env remains the same, we only change the Binding
+(define-type-alias Env (listof Binding))
+(define mt-env empty)
+(define extend-env cons)
+
+
+; auxiary functions for messageLookup                                         
+(define (lookup [varName : symbol] [env : Env]) : (boxof Value)
+       (cond
+            [(empty? env) (error 'lookup (string-append (symbol->string varName) " não foi encontrado"))] ; livre (não definida)
+            [else (cond
+                    [(symbol=? varName (bind-name (first env)))   ; achou!
+                     (bind-val (first env))]
+                    [else (lookup varName (rest env))])]))        ; vê no resto
+
+
+
+; Primitive operators
+(define (num+ [l : Value] [r : Value]) : Value
+    (cond
+        [(and (numV? l) (numV? r))
+             (numV (+ (numV-n l) (numV-n r)))]
+        [else
+             (error 'num+ "Um dos argumentos não é número")]))
+
+(define (num* [l : Value] [r : Value]) : Value
+    (cond
+        [(and (numV? l) (numV? r))
+             (numV (* (numV-n l) (numV-n r)))]
+        [else
+             (error 'num* "Um dos argumentos não é número")]))
+
+
+;;;;;;;;; NEW IMPLEMENTATION
+
+(define-type MethodDefinition
+  [regularMethod (par : symbol) (body : ExprC)]
+  [primitiveMethod (num : number)])
+
+(define ObjectClass
+  (classV (nullV)    ; pois Object não possui uma superclasse
+          'nullVar  ; a classe Object não define/ utiliza variáveis de instância
+          (methodV 'mensagemDesconhecida (primitiveMethod 1)) ; 1 é o índice do método no vetor de métodos primitivos
+          (methodV 'nullMethod (regularMethod 'nullPar (nullC)))))   ; segundo método não é utilizado
+
+
+(define PrimitiveMethodVector
+  (make-vector 2 (lambda ([ x : Value] ) : Value
+                   (error 'primitive "invalid primitive method")))); 0
+
+;add primitive 1 for 'mensagemDesconhecida
+(vector-set! PrimitiveMethodVector 1
+             (lambda ([methodName : Value])
+               (type-case Value methodName
+                 [symV (symbolValue)
+                       (error 'messaging
+                              (string-append "mensagemDesconhecida:"
+                                             (symbol->string symbolValue)))]
+                 [else (error 'wrongArgument
+                              "Wrong Argument: primitive 1 should receive a symV")])))
+
+
+; ((vector-ref PrimitiveMethodVector 1) parametro)
+
+(define (build-env-obj class-val value)
+  (type-case Value class-val
+    [classV (superClass instVar method1 method2)
+            (let ([parent-vars (if (nullV? superClass) mt-env              ; sem superclasse, retorna ambiente vazio
+                                   (build-env-obj superClass (nullV)))]) 
+              (extend-env (bind instVar (box value)) parent-vars))] 
+    [else (error 'build-env-obj "classe invalida")]))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+; Return type for the interpreter, Value
+
+
+(define (interp [a : ExprC] [objectEnv : Env]) : Value
+  (type-case ExprC a
+    [nullC () (nullV)]
+    [numC (n) (numV n) ]
+    [idC (n)  (unbox (lookup n objectEnv))]; cascading search, first in env then in sto
+    ;I left plusC without error-checking
+    [plusC (l r)
+             (let ((left (interp l objectEnv ))
+                   (right (interp r objectEnv )))
+               (num+ left right))]
+    ;multC
+    [multC (l r)
+           (let ( (left (interp l objectEnv ))
+                  (right (interp r objectEnv )))
+             ;in this case type cheking is a little different
+             (if (numV? left)
+                 (if (numV? right)
+                     (num* left right)
+                     (error 'interp "second argument of multiplication not a number value"))
+                 (error 'interp "first argument of multiplication not a number value"))
+                 )]
+    ; ifC serializes
+    [ifC (c s n) (type-case Value (interp c objectEnv )
+                   [numV (value)
+                        (if (zero? value)
+                            (interp n objectEnv )
+                            (interp s objectEnv ))]
+                   [else (error 'interp "condition not a number")]
+                   )]
+    [quoteC  (s) (symV s)]
+    [readloopC (ph) (letrec ( (read-till-end (lambda ()
+                                              (let ( (input (read)))
+                                                (if (and (s-exp-symbol? input )
+                                                         (eq? (s-exp->symbol input) '@END))
+                                                    (begin (display 'FINISHED-READLOOP)
+                                                           (symV  'END_OF_loop))
+                                                    (begin (display (interp (desugar (parse input)) objectEnv ))
+                                                           (read-till-end)))))))
+                     (read-till-end))]
+    [letC (variable expression body)
+          (let ((value (interp expression objectEnv )))
+            (interp body
+                    (extend-env (bind variable (box value)) objectEnv)
+                    ))]
+    [seqC (firstCommand secondCommand)
+          (begin (interp firstCommand objectEnv)
+                 (interp secondCommand objectEnv))]
+    [setC  (variableName statement)
+           (let ((varBox (lookup variableName objectEnv))
+                 (value (interp statement objectEnv)))
+             (begin (set-box! varBox value)
+                    value))]
+
+    ;;;;;;;; NEW IMPLEMENTATION
+    [classC (sc iv m1 m2)
+            (let ([superClass (if (equal? sc 'null) (nullV)
+                                  (unbox (lookup sc objectEnv)))])
+              (classV superClass iv (interp m1 objectEnv) (interp m2 objectEnv)))]
+
+    [regularMethodC (n a b) (methodV n (regularMethod a b))]
+    [primitiveMethodC (n pnum) (methodV n (primitiveMethod pnum))]
+    [newC (c v)
+          (let* ([class-val (unbox (lookup c objectEnv))]   ; procura a classe de nome c no ambiente
+                 [inst-vars (build-env-obj class-val (interp v objectEnv))]) ; constroi as variáveis de instância recursivamente
+            (objectV class-val inst-vars))] 
+
+    [sendC (r m a)
+           (let* ([obj (interp r objectEnv)]    ; avalia o objeto receptor
+                  [class (objectV-class obj)])  ; obtém a classe do objeto
+
+             ; função recursiva methodLookup
+             (letrec ([methodLookup (lambda (class)
+                                      (if (classV? class)
+                                          (cond
+                                            [(equal? m (methodV-name (classV-method1 class))) (classV-method1 class)]  ; m == method1                                                
+                                            [(equal? m (methodV-name (classV-method2 class))) (classV-method2 class)]                                                 
+                                            [(not (equal? (classV-superClass class) (nullV)))  
+                                             (methodLookup (classV-superClass class))]      ; continua procurando na superclasse                                            
+                                            [else (nullV)])  ; método não encontrado                                                            
+                                          (error 'methodLookup "classe invalida")))])
+
+               (let ([method (methodLookup class)])
+                 (if (not (nullV? method))
+                     ; como encontramos o metodo, iremos avalia-lo
+                     ; porém devemos verificar se é regular ou primitivo antes
+                     (if (regularMethod? (methodV-def method))
+                         (interp (regularMethod-body (methodV-def method))
+                                 (extend-env (bind (regularMethod-par (methodV-def method)) 
+                                                   (box (interp a objectEnv)))              
+                                             (extend-env (bind 'self (box obj)) (objectV-instVar obj))))
+
+                     ; se for primitivo
+                         ((vector-ref PrimitiveMethodVector (primitiveMethod-num (methodV-def method))) (interp a objectEnv)))
+
+                     ; se não encontramos o metodo, vamos imprimir a mensagem de erro
+                     ((vector-ref PrimitiveMethodVector 1) (interp (quoteC m) objectEnv)) ))))]
+        
+    ))
+
+
+; Parser with funny instructions for boxes
+(define (parse [s : s-expression]) : ExprS
+  (cond
+    [(s-exp-number? s) (numS (s-exp->number s))]
+    [(s-exp-symbol? s) (idS (s-exp->symbol s))] ; pode ser um símbolo livre nas definições de função
+    [(s-exp-list? s)
+     (let ([sl (s-exp->list s)])
+       (case (s-exp->symbol (first sl))
+         [(+) (plusS (parse (second sl)) (parse (third sl)))]
+         [(*) (multS (parse (second sl)) (parse (third sl)))]
+         [(-) (bminusS (parse (second sl)) (parse (third sl)))]
+         [(~) (uminusS (parse (second sl)))]
+          [(if) (ifS (parse (second sl)) (parse (third sl)) (parse (fourth sl)))]
+         [(quote) (quoteS (s-exp->symbol (second sl)))]
+         [(let) (letS (s-exp->symbol (second sl))
+                      (parse (third sl))
+                      (parse (fourth sl)))]
+         [(set!) (setS (s-exp->symbol (second sl))
+                      (parse (third sl)))]
+         [(seq) (seqS (parse (second sl))
+                      (parse (third sl)))]
+
+         ;;;; NEW IMPLEMENTATION
+         [(class) (classS (s-exp->symbol (second sl))
+                          (s-exp->symbol (third sl))
+                          (parse (fourth sl))
+                          (parse (fourth (rest sl))))]
+         [(regularMethod) (regularMethodS (s-exp->symbol (second sl))
+                            (s-exp->symbol (third sl))
+                            (parse (fourth sl)))]
+         [(new) (newS (s-exp->symbol (second sl))
+                      (parse (third sl)))]
+         [(send) (sendS (parse (second sl))
+                        (s-exp->symbol (third sl))
+                        (parse (fourth sl)))]
+
+         [else (error 'parse "invalid list input")]
+         ))]
+    [else (error 'parse "invalid input")]
+    ))
+ 
+
+; Facilitator
+; Enviromnent needs to be intialzed with the association for the Object class, which needs to be defined elsewhere 
+(define initialObjectEnv (extend-env (bind 'Object (box ObjectClass)) mt-env))
+(define (interpS [s : s-expression]) : Value
+  (interp (desugar (parse s)) initialObjectEnv ))
+
+; Examples
+;(interpS '(class Object i (regularMethod m1 x x) (regularMethod m2 x i)))
+;(interpS '(let classe1 (class Object i (regularMethod m1 x x) (regularMethod m2 x i))
+;            (let object1 (new classe1 1) (send object1 m1 5))))
+;(interpS '(let classe1 (class Object i (regularMethod m1 x x) (regularMethod m2 x i))
+;            (let object1 (new classe1 1) (send object1 m2 5))))
+; no proximo exemplo definimos um novo m1 em uma subclasse, instanciamos e mandamos a mensagem m2 para no novo
+;objeto. O interpretador deve voltar o resultado de m1 da subclasse. (
+;(interpS '(let classe1 (class Object i (regularMethod m1 x i) (regularMethod m2 x (send self m1 x)))
+;            (let classe2 (class classe1 j (regularMethod m1 x (quote subclassregularMethod)) (regularMethod m3 y y))
+;              (let object2 (new classe2 200) (send object2 m2 55)))))
+;(interpS '(let classe1 (class Object i (regularMethod m1 x i) (regularMethod m2 x (send self m1 x)))
+;            (let classe2 (class classe1 j (regularMethod m1 x (quote subclassregularMethod)) (regularMethod m3 y y))
+;              (let object2 (new classe2 200) (send object2 m22 55)))))
+
+
+; Tests
+
+(test ; Métodos e variáveis de instância funcionam
+  (interpS '(let Classezinha (class Object i
+                         (regularMethod beep x x)
+                         (regularMethod boop _ i))
+
+            (let objetinho (new Classezinha 1)
+              (+ (send objetinho beep 10)
+                 (send objetinho boop 0)
+                 ))))
+  (numV 11))
+
+(test ; Self funciona
+  (interpS '(let Classezinha (class Object i 
+                          (regularMethod beep x (+ 10 x))
+                          (regularMethod boop x (send self beep (+ 1 x))))
+
+              (let objetinho (new Classezinha 0) 
+                (send objetinho boop 0))))
+  (numV 11))
+
+(test ; Sobrescrita funciona
+  (interpS '(let Classezinha1 (class Object i 
+                          (regularMethod beep _ 9)
+                          (regularMethod boop _ 10))
+
+              (let Classezinha2 (class Classezinha1 j
+                            (regularMethod beep _ 1)
+                            (regularMethod unused _ 0))
+
+                (let objetinho (new Classezinha2 0) 
+                  (+ (send objetinho beep 0)
+                     (send objetinho boop 0))))))
+  (numV 11))
+
+(test ; Sobrescrita com self funciona
+  (interpS '(let Classezinha1 (class Object i 
+                          (regularMethod beep x 9)
+                          (regularMethod boop x (send self beep x)))
+
+              (let Classezinha2 (class Classezinha1 j
+                            (regularMethod beep _ 11)
+                            (regularMethod unused _ 0))
+
+                (let objetinho (new Classezinha2 0) 
+                  (send objetinho boop 0)))))
+  (numV 11))
+
+(test ; Set com variáveis de instância funciona
+  (interpS '(let Classezinha1 (class Object
+                           i
+                           (regularMethod setVariable x (set! i x))
+                           (regularMethod getVariable x i))
+
+              (let objetinho (new Classezinha1 9)
+                (seq (send objetinho setVariable 11)
+                     (send objetinho getVariable 0)))))
+  (numV 11))
+
+
+(test ; Variáveis de instância classes filhas funcionam corretamente
+  (interpS '(let Classezinha1 (class Object
+                           i
+                           (regularMethod getI _ i)
+                           (regularMethod beep x x))
+
+              (let Classezinha2 (class Classezinha1
+                             j
+                             (regularMethod getJ _ j)
+                             (regularMethod beep x x))
+
+                (let objetinho (new Classezinha2 11)
+                  (send objetinho getJ 0)))))
+  (numV 11))
+
+(test ; Acessar de instância de classes ancestrais devolve null
+  (interpS '(let Classezinha1 (class Object
+                           i
+                           (regularMethod getI _ i)
+                           (regularMethod beep x x))
+
+              (let Classezinha2 (class Classezinha1
+                             j
+                             (regularMethod getJ _ j)
+                             (regularMethod beep x x))
+
+                (let objetinho (new Classezinha2 9)
+                  (send objetinho getI 0)))))
+  (nullV))
+
+
+(test ; É possível acessar e modificar variáveis de instância dos pais
+  (interpS '(let Classezinha1 (class Object
+                           i
+                           (regularMethod getI _ i)
+                           (regularMethod setI x (set! i x)))
+
+              (let Classezinha2 (class Classezinha1
+                             j
+                             (regularMethod getJ _ j)
+                             (regularMethod setJ x (set! j x)))
+
+                (let Classezinha3 (class Classezinha2 
+                                    k 
+                                    (regularMethod getK _ k)
+                                    (regularMethod setK x (set! k x))
+                                    )
+
+                (let objetinho (new Classezinha3 9)
+                  (seq 
+                    (send objetinho setI 1)
+
+                    (seq 
+                       (send objetinho setJ 10)
+
+                       (seq 
+                         (send objetinho setK 100)
+
+                         (+ (send objetinho getI 0)
+                            (+ 
+                              (send objetinho getJ 0)
+                              (send objetinho getK 0)))
+                         ))))))))
+  (numV 111))
+
+(test ; É possível modificar variáveis de instância dos pais pelos métodos dos filhos
+  (interpS '(let Classezinha1 (class Object
+                           i
+                           (regularMethod getI _ i)
+                           (regularMethod unused _ 0))
+
+              (let Classezinha2 (class Classezinha1
+                             j
+                             (regularMethod setI x (set! i x))
+                             (regularMethod getJ _ j))
+
+                (let Classezinha3 (class Classezinha2 
+                                    k 
+                                    (regularMethod setJ x (set! j x))
+                                    (regularMethod unused _ 0))
+
+                (let objetinho (new Classezinha3 9)
+                  (seq 
+                    (send objetinho setI 1)
+
+                    (seq 
+                       (send objetinho setJ 10)
+
+                       (+ 
+                         (send objetinho getI 0)
+                         (send objetinho getJ 0))
+                       )))))))
+  (numV 11))
+
+(test ; Objetos são independentes
+  (interpS '(let Classezinha1 (class Object
+                           i
+                           (regularMethod getI _ i)
+                           (regularMethod setI x (set! i x)))
+
+              (let Classezinha2 (class Classezinha1
+                             j
+                             (regularMethod getJ _ j)
+                             (regularMethod setJ x (set! j x)))
+
+                (let objetinho1 (new Classezinha2 1)
+                  (seq 
+                    (send objetinho1 setI 10)
+
+                    (let objetinho2 (new Classezinha2 100) 
+                      (seq 
+                        (send objetinho2 setI 1000)
+
+                        (+ (send objetinho1 getI 0)
+                           (+ 
+                             (send objetinho1 getJ 0)
+                             (+ (send objetinho2 getI 0)
+                                (send objetinho2 getJ 0))))
+                        )))))))
+  (numV 1111))
+    
+
